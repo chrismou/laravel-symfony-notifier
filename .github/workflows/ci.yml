@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['8.2', '8.3', '8.4', '8.5']
+        laravel: ['12', '13']
+        symfony: ['7.4', '8']
+        dependencies: ['highest']
+        exclude:
+          # Laravel 13 needs PHP 8.3 or later.
+          - php-version: '8.2'
+            laravel: '13'
+          # Symfony 8 needs PHP 8.4 or later.
+          - php-version: '8.2'
+            symfony: '8'
+          - php-version: '8.3'
+            symfony: '8'
+        include:
+          # The oldest versions every constraint allows.
+          - php-version: '8.2'
+            laravel: '12'
+            symfony: '7.4'
+            dependencies: 'lowest'
+
+    name: PHP ${{ matrix.php-version }}, Laravel ${{ matrix.laravel }}, Symfony ${{ matrix.symfony }} (${{ matrix.dependencies }})
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: curl
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies for Laravel ${{ matrix.laravel }} and Symfony ${{ matrix.symfony }}
+        run: |
+          testbench=$([ "${{ matrix.laravel }}" = "12" ] && echo "^10.0" || echo "^11.0")
+          symfony="^${{ matrix.symfony }}"
+          # Teams Workflows URLs need the bridge releases that keep the URL's query string.
+          teams="^7.4.14"
+          if [ "${{ matrix.symfony }}" = "8" ]; then
+            symfony="^8.0"
+            teams="~8.0.14 || ^8.1.1"
+          fi
+          composer require --dev --no-interaction --no-update \
+            "laravel/framework:^${{ matrix.laravel }}.0" \
+            "orchestra/testbench:${testbench}" \
+            "symfony/notifier:${symfony}" \
+            "symfony/discord-notifier:${symfony}" \
+            "symfony/microsoft-teams-notifier:${teams}" \
+            "symfony/rocket-chat-notifier:${symfony}" \
+            "symfony/slack-notifier:${symfony}" \
+            "symfony/telegram-notifier:${symfony}" \
+            "symfony/twilio-notifier:${symfony}"
+          if [ "${{ matrix.dependencies }}" = "lowest" ]; then
+            composer update --no-interaction --prefer-dist --no-progress --prefer-lowest --prefer-stable
+          else
+            composer update --no-interaction --prefer-dist --no-progress
+          fi
+
+      - name: Run linter
+        run: composer lint
+
+      - name: Run static analysis
+        # The lowest versions can have stale type stubs; the other jobs cover analysis.
+        if: matrix.dependencies == 'highest'
+        run: composer analyse
+
+      - name: Run tests
+        run: composer test
